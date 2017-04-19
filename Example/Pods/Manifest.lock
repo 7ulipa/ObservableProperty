@@ -1,0 +1,16 @@
+PODS:
+  - ObservableProperty (0.1.0)
+
+DEPENDENCIES:
+  - ObservableProperty (from `../`)
+
+EXTERNAL SOURCES:
+  ObservableProperty:
+    :path: "../"
+
+SPEC CHECKSUMS:
+  ObservableProperty: 8eea1671290bf330cb373aa40d5dce4e9aec5589
+
+PODFILE CHECKSUM: f59d23551f69ecaa6bc6fda5e782f958c9980bcb
+
+COCOAPODS: 1.2.1
