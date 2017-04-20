@@ -100,4 +100,16 @@ public final class ObservableProperty<T> {
         })
         return result
     }
+    
+    public func combineLatest<G>(with property: ObservableProperty<G>) -> ObservableProperty<(T, G)> {
+        let value: (T, G) = (self.value, property.value)
+        let result = ObservableProperty<(T, G)>(value)
+        result.willDealloc.append(observeChanges({ [weak result] (newValue) in
+            result?.value.0 = newValue
+        }))
+        result.willDealloc.append(property.observeChanges({ [weak result] (newValue) in
+            result?.value.1 = newValue
+        }))
+        return result
+    }
 }

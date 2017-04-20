@@ -13,24 +13,12 @@ class ViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        
-        let property = ObservableProperty(createProperty())
-        if #available(iOS 10.0, *) {
-            let timer = Timer(timeInterval: 3, repeats: true) { [weak property] (_) in
-                if let property = property {
-                    property.value = self.createProperty()
-                }
-            }
-            RunLoop.current.add(timer, forMode: .commonModes)
+        let property1 = createProperty()
+        let property2 = createProperty()
+        let d = property1.combineLatest(with: property2).observeValues { (value) in
+            debugPrint(value)
         }
-        
-        var c = 0
-        let d = property.flatMap { $0 }.observeValues { (value) in
-            debugPrint(c, value)
-            c = c + 1
-        }
-        
-        DispatchQueue.global().asyncAfter(deadline: .now() + 10) { 
+        DispatchQueue.global().asyncAfter(deadline: .now() + 5) { 
             d.dispose()
         }
     }
