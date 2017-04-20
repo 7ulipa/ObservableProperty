@@ -36,11 +36,17 @@ public final class Disposable {
 
 public final class ObservableProperty<T> {
     
-    private var deinitDiseposable: Disposable?
+    public func observeWillDealloc(_ block: @escaping () -> Void) {
+        willDealloc.append(Disposable(block))
+    }
+    
+    private var willDealloc: [Disposable] = []
     
     deinit {
         debugPrint("\(self) deinit")
-        deinitDiseposable?.dispose()
+        willDealloc.forEach {
+            $0.dispose()
+        }
     }
     
     private var observers: Set<Box<((T) -> Void, ObservableProperty<T>)>> = []
@@ -57,33 +63,41 @@ public final class ObservableProperty<T> {
         self.value = value
     }
     
-    @discardableResult public func observe(_ block: @escaping (T) -> Void) -> Disposable {
+    @discardableResult public func observeValues(_ block: @escaping (T) -> Void) -> Disposable {
         block(value)
+        return observeChanges(block)
+    }
+    
+    
+    
+    @discardableResult public func observeChanges(_ block: @escaping (T) -> Void) -> Disposable {
         let box = Box((block, self))
         observers.insert(box)
-        return Disposable { 
+        return Disposable {
             box.value.1.observers.remove(box)
         }
     }
     
     public func map<G>(_ transform: @escaping (T) -> G) -> ObservableProperty<G> {
         let result = ObservableProperty<G>(transform(value))
-        result.deinitDiseposable = observe { [weak result] (value) in
+        result.willDealloc.append(observeChanges { [weak result] (value) in
             result?.value = transform(value)
-        }
+        })
         return result
     }
     
     public func flatMap<G>(_ transform: @escaping (T) -> ObservableProperty<G>) -> ObservableProperty<G> {
         let mapped = map(transform)
-        var currentDispose: Disposable?
         let result = ObservableProperty<G>(mapped.value.value)
-        result.deinitDiseposable = mapped.observe { [weak result] (value) in
+        var currentDispose: Disposable? = mapped.value.observeChanges { [weak result] (value) in
+            result?.value = value
+        }
+        result.willDealloc.append(mapped.observeChanges { [weak result] (value) in
             currentDispose?.dispose()
-            currentDispose = value.observe { (newValue) in
+            currentDispose = value.observeValues { (newValue) in
                 result?.value = newValue
             }
-        }
+        })
         return result
     }
 }
