@@ -9,30 +9,31 @@
 import UIKit
 import ObservableProperty
 
+
+
 class ViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        let property1 = createProperty()
-        let property2 = createProperty()
-        let d = property1.combineLatest(with: property2).observeValues { (value) in
+        
+        let s = createProperty(1)
+        let d = s.producer.replayLast.flatMap { _ in self.createProperty(0.1).producer }.observe { (value) in
             debugPrint(value)
         }
-        DispatchQueue.global().asyncAfter(deadline: .now() + 5) { 
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + 10) {
             d.dispose()
         }
     }
     
-    private func createProperty() -> ObservableProperty<Int> {
-            let new = ObservableProperty(0)
+    private func createProperty(_ interval: TimeInterval = 1) -> ObservableProperty<Int> {
+        let new = ObservableProperty<Int>(0)
         if #available(iOS 10.0, *) {
-            let t = Timer(timeInterval: 0.1, repeats: true, block: { [weak new] (_) in
-                if let new = new {
-                    new.value = new.value + 1
-                }
+            let t = Timer(timeInterval: interval, repeats: true, block: { (_) in
+                new.value += 1
             })
             RunLoop.main.add(t, forMode: .commonModes)
-            new.observeWillDealloc {
+            new.willDeinit.append {
                 t.invalidate()
             }
         }

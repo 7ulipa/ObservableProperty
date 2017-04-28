@@ -36,80 +36,194 @@ public final class Disposable {
 
 public final class ObservableProperty<T> {
     
-    public func observeWillDealloc(_ block: @escaping () -> Void) {
-        willDealloc.append(Disposable(block))
-    }
+    public let producer = Subject<T>(shouldReplayLast: true)
     
-    private var willDealloc: [Disposable] = []
+    public var willDeinit: [() -> Void] = []
     
     deinit {
         debugPrint("\(self) deinit")
-        willDealloc.forEach {
-            $0.dispose()
-        }
+        producer.tearDown()
+        willDeinit.forEach { $0() }
     }
-    
-    private var observers: Set<Box<((T) -> Void, ObservableProperty<T>)>> = []
     
     public var value: T {
         didSet {
-            observers.forEach { (box) in
-                box.value.0(value)
-            }
+            producer.consume(value)
         }
     }
     
     public init(_ value: T) {
         self.value = value
-    }
-    
-    @discardableResult public func observeValues(_ block: @escaping (T) -> Void) -> Disposable {
-        block(value)
-        return observeChanges(block)
-    }
-    
-    
-    
-    @discardableResult public func observeChanges(_ block: @escaping (T) -> Void) -> Disposable {
-        let box = Box((block, self))
-        observers.insert(box)
-        return Disposable {
-            box.value.1.observers.remove(box)
-        }
-    }
-    
-    public func map<G>(_ transform: @escaping (T) -> G) -> ObservableProperty<G> {
-        let result = ObservableProperty<G>(transform(value))
-        result.willDealloc.append(observeChanges { [weak result] (value) in
-            result?.value = transform(value)
-        })
-        return result
-    }
-    
-    public func flatMap<G>(_ transform: @escaping (T) -> ObservableProperty<G>) -> ObservableProperty<G> {
-        let mapped = map(transform)
-        let result = ObservableProperty<G>(mapped.value.value)
-        var currentDispose: Disposable? = mapped.value.observeChanges { [weak result] (value) in
-            result?.value = value
-        }
-        result.willDealloc.append(mapped.observeChanges { [weak result] (value) in
-            currentDispose?.dispose()
-            currentDispose = value.observeValues { (newValue) in
-                result?.value = newValue
-            }
-        })
-        return result
-    }
-    
-    public func combineLatest<G>(with property: ObservableProperty<G>) -> ObservableProperty<(T, G)> {
-        let value: (T, G) = (self.value, property.value)
-        let result = ObservableProperty<(T, G)>(value)
-        result.willDealloc.append(observeChanges({ [weak result] (newValue) in
-            result?.value.0 = newValue
-        }))
-        result.willDealloc.append(property.observeChanges({ [weak result] (newValue) in
-            result?.value.1 = newValue
-        }))
-        return result
+        producer.consume(value)
     }
 }
+
+public protocol Observable {
+    associatedtype Value
+    func observe(_ observer: @escaping Observer<Value>) -> Disposable
+}
+
+public typealias SchedulerBlock = (() -> Void) -> Void
+
+public enum Scheduler {
+    case immediate, gcdQueue(DispatchQueue), operationQueue(OperationQueue), custom(SchedulerBlock)
+    public func schedule(_ block: @escaping () -> Void) {
+        switch self {
+        case .immediate:
+            block()
+        case .operationQueue(let queue):
+            queue.addOperation(block)
+        case .gcdQueue(let queue):
+            queue.async(execute: block)
+        case .custom(let scheduleBlock):
+            scheduleBlock(block)
+        }
+    }
+}
+
+public typealias Observer<Value> = (Value) -> Void
+
+private enum Last<Value> {
+    case initial, value(Value)
+}
+
+public final class Subject<T>: Observable {
+    
+    public typealias Value = T
+    
+    private let scheduler: Scheduler
+    fileprivate let shouldReplayLast: Bool
+    private var last: Last<T> = .initial
+    
+    public init(scheduler: Scheduler = .immediate, shouldReplayLast: Bool = false) {
+        self.scheduler = scheduler
+        self.shouldReplayLast = shouldReplayLast
+    }
+    
+    public func consume(_ value: T) {
+        if shouldReplayLast {
+            last = .value(value)
+        }
+        scheduler.schedule {
+            self.observers.forEach { box in
+                box.value.0(value)
+            }
+        }
+    }
+
+    private var observers: Set<Box<(Observer<T>, Subject<T>)>> = []
+    fileprivate func tearDown() {
+        observers = []
+    }
+    
+    @discardableResult public func observe(_ observer: @escaping Observer<T>) -> Disposable {
+        if shouldReplayLast, case .value(let value) = last {
+            scheduler.schedule {
+                observer(value)
+            }
+        }
+        let box = Box<(Observer<T>, Subject<T>)>((observer, self))
+        observers.insert(box)
+        return Disposable { [weak self, weak box] in
+            if let box = box, let `self` = self {
+                self.observers.remove(box)
+            }
+        }
+    }
+    
+    public var willDeinit: [() -> Void] = []
+    
+    deinit {
+        debugPrint("\(self)<\(Unmanaged.passUnretained(self).toOpaque())> deinit")
+        willDeinit.forEach { $0() }
+    }
+    
+    public var replayLast: Subject {
+        if shouldReplayLast {
+            return self
+        } else {
+            let new = Subject(shouldReplayLast: true)
+            let d = observe { [weak new] value in
+                new?.consume(value)
+            }
+            new.willDeinit.append {
+                d.dispose()
+            }
+            return new
+        }
+    }
+    
+    public func map<G>(transform: @escaping (T) -> G) {
+        let new = Subject<G>(shouldReplayLast: shouldReplayLast)
+        let d = observe { [weak new] (value) in
+            new?.consume(transform(value))
+        }
+        new.willDeinit.append {
+            d.dispose()
+        }
+    }
+    
+    public func flatMap<G>(transform: @escaping (T) -> Subject<G>) -> Subject<G> {
+        let new = Subject<G>(shouldReplayLast: shouldReplayLast)
+        var lastDispose: Disposable?
+        let d = observe { [weak new] (value) in
+            lastDispose?.dispose()
+            lastDispose = transform(value).observe({ (value) in
+                new?.consume(value)
+            })
+        }
+        new.willDeinit.append {
+            d.dispose()
+            lastDispose?.dispose()
+        }
+        return new
+    }
+    
+    public func combineLatest<G>(with subject: Subject<G>) -> Subject<(T, G)> {
+        let new = Subject<(T, G)>(shouldReplayLast: shouldReplayLast)
+        var combined = (Last<T>.initial, Last<G>.initial)
+        
+        let process = { [weak new] in
+            if case .value(let value1) = combined.0, case .value(let value2) = combined.1 {
+                new?.consume((value1, value2))
+            }
+        }
+        
+        let d1 = observe { (value) in
+            combined.0 = .value(value)
+            process()
+        }
+        
+        let d2 = subject.observe { (value) in
+            combined.1 = .value(value)
+            process()
+        }
+        
+        new.willDeinit.append {
+            d1.dispose()
+            d2.dispose()
+        }
+        
+        return new
+    }
+}
+
+extension Subject where T: Equatable {
+    var distinct: Subject {
+        let new = Subject(shouldReplayLast: shouldReplayLast)
+        var last: Last<T> = .initial
+        let d = observe { [weak new] (value) in
+            if case .value(let lastValue) = last, lastValue == value {
+                return
+            }
+            last = .value(value)
+            new?.consume(value)
+        }
+        
+        new.willDeinit.append {
+            d.dispose()
+        }
+        return new
+    }
+}
+
