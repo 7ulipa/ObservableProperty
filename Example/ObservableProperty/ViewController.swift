@@ -15,14 +15,17 @@ class ViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
+//        let p = createProperty()
+//        let d = p.producer.observe { (value) in
+//            debugPrint(value)
+//        }
+//        DispatchQueue.main.asyncAfter(deadline: .now() + 10) {
+//            d.dispose()
+//        }
         
-        let s = createProperty(1)
-        let d = s.producer.replayLast.flatMap { _ in self.createProperty(0.1).producer }.observe { (value) in
+        let p = ObservableProperty(10)
+        p.producer.observe { (value) in
             debugPrint(value)
-        }
-        
-        DispatchQueue.main.asyncAfter(deadline: .now() + 10) {
-            d.dispose()
         }
     }
     
